@@ -1,0 +1,39 @@
+{
+  "name": "financeflow-backend",
+  "version": "1.0.0",
+  "description": "Node.js + SQLite backend for FinanceFlow application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "init-db": "node database/init.js",
+    "admin": "node admin.js",
+    "admin:stats": "node admin.js stats",
+    "admin:clients": "node admin.js clients",
+    "admin:entries": "node admin.js entries",
+    "admin:invoices": "node admin.js invoices",
+    "admin:export": "node admin.js export"
+  },
+  "keywords": [
+    "finance",
+    "invoice",
+    "nodejs",
+    "sqlite",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^9.4.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

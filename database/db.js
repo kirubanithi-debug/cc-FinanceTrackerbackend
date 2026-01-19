@@ -7,14 +7,17 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
+// Resolve full database path
+const dbPath = path.resolve(
+  __dirname,
+  process.env.DATABASE_PATH || 'financeflow.db'
+);
+    
 // Ensure database directory exists
-const dbDir = path.dirname(process.env.DATABASE_PATH || './database/financeflow.db');
+const dbDir = path.dirname(dbPath);
 if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
 }
-
-// Database file path
-const dbPath = path.resolve(process.env.DATABASE_PATH || './database/financeflow.db');
 
 // Create database connection (verbose logging disabled for cleaner output)
 const db = new Database(dbPath);

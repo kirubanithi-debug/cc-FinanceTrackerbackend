@@ -50,8 +50,7 @@ if (process.env.NODE_ENV === 'development') {
 app.use(express.json({ limit: '10mb' })); // Increased limit for logo uploads
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from frontend (for production)
-app.use(express.static(path.join(__dirname, '../finance-app')));
+
 
 // API Routes
 app.use('/api/clients', clientsRoutes);
@@ -71,10 +70,12 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Serve frontend for all other routes (SPA support)
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../finance-app/index.html'));
+app.get('/', (req, res) => {
+    res.json({
+        message: 'FinanceFlow Backend is running'
+    });
 });
+
 
 // Error handling middleware
 app.use(errorHandler);

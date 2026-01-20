@@ -1,20 +1,21 @@
 /**
- * Clients Controller
- * Handles all client-related business logic
+ * Clients Controller - Supabase Version
  */
 
-const { db } = require('../database/db');
+const { supabase } = require('../database/db');
 
 const clientsController = {
     /**
      * Get all clients
      */
-    getAll: (req, res, next) => {
+    getAll: async (req, res, next) => {
         try {
-            const clients = db.prepare(`
-                SELECT * FROM clients 
-                ORDER BY name ASC
-            `).all();
+            const { data: clients, error } = await supabase
+                .from('clients')
+                .select('*')
+                .order('name', { ascending: true });
+
+            if (error) throw error;
 
             res.json({
                 success: true,
@@ -35,12 +36,16 @@ const clientsController = {
     /**
      * Get client by ID
      */
-    getById: (req, res, next) => {
+    getById: async (req, res, next) => {
         try {
             const { id } = req.params;
-            const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+            const { data: client, error } = await supabase
+                .from('clients')
+                .select('*')
+                .eq('id', id)
+                .single();
 
-            if (!client) {
+            if (error || !client) {
                 return res.status(404).json({
                     success: false,
                     error: { code: 'NOT_FOUND', message: 'Client not found' }
@@ -66,11 +71,10 @@ const clientsController = {
     /**
      * Create a new client
      */
-    create: (req, res, next) => {
+    create: async (req, res, next) => {
         try {
             const { name, phone, address } = req.body;
 
-            // Validation
             if (!name || !phone) {
                 return res.status(400).json({
                     success: false,
@@ -78,14 +82,13 @@ const clientsController = {
                 });
             }
 
-            const stmt = db.prepare(`
-                INSERT INTO clients (name, phone, address) 
-                VALUES (?, ?, ?)
-            `);
+            const { data: newClient, error } = await supabase
+                .from('clients')
+                .insert({ name, phone, address: address || null })
+                .select()
+                .single();
 
-            const result = stmt.run(name, phone, address || null);
-
-            const newClient = db.prepare('SELECT * FROM clients WHERE id = ?').get(result.lastInsertRowid);
+            if (error) throw error;
 
             res.status(201).json({
                 success: true,
@@ -107,13 +110,17 @@ const clientsController = {
     /**
      * Update a client
      */
-    update: (req, res, next) => {
+    update: async (req, res, next) => {
         try {
             const { id } = req.params;
             const { name, phone, address } = req.body;
 
-            // Check if client exists
-            const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+            const { data: existing } = await supabase
+                .from('clients')
+                .select('id')
+                .eq('id', id)
+                .single();
+
             if (!existing) {
                 return res.status(404).json({
                     success: false,
@@ -121,18 +128,21 @@ const clientsController = {
                 });
             }
 
-            const stmt = db.prepare(`
-                UPDATE clients 
-                SET name = COALESCE(?, name),
-                    phone = COALESCE(?, phone),
-                    address = COALESCE(?, address),
-                    updated_at = datetime('now')
-                WHERE id = ?
-            `);
+            const updates = { updated_at: new Date().toISOString() };
+            if (name) updates.name = name;
+            if (phone) updates.phone = phone;
+            if (address !== undefined) updates.address = address;
 
-            stmt.run(name, phone, address, id);
+            await supabase
+                .from('clients')
+                .update(updates)
+                .eq('id', id);
 
-            const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+            const { data: updated } = await supabase
+                .from('clients')
+                .select('*')
+                .eq('id', id)
+                .single();
 
             res.json({
                 success: true,
@@ -154,11 +164,16 @@ const clientsController = {
     /**
      * Delete a client
      */
-    delete: (req, res, next) => {
+    delete: async (req, res, next) => {
         try {
             const { id } = req.params;
 
-            const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+            const { data: existing } = await supabase
+                .from('clients')
+                .select('id')
+                .eq('id', id)
+                .single();
+
             if (!existing) {
                 return res.status(404).json({
                     success: false,
@@ -166,7 +181,7 @@ const clientsController = {
                 });
             }
 
-            db.prepare('DELETE FROM clients WHERE id = ?').run(id);
+            await supabase.from('clients').delete().eq('id', id);
 
             res.json({
                 success: true,

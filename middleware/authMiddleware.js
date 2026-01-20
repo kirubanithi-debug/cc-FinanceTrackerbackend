@@ -1,14 +1,12 @@
 const jwt = require('jsonwebtoken');
+const { supabase } = require('../database/db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'financeflow-secret-key-change-it-in-prod';
-
-const { db } = require('../database/db');
 
 /**
  * Middleware to verify JWT token
  */
 const verifyToken = (req, res, next) => {
-    // Get auth header value
     const bearerHeader = req.headers['authorization'];
 
     if (!bearerHeader) {
@@ -18,7 +16,6 @@ const verifyToken = (req, res, next) => {
         });
     }
 
-    // Format: "Bearer <token>"
     const bearer = bearerHeader.split(' ');
     const bearerToken = bearer[1];
 
@@ -30,9 +27,7 @@ const verifyToken = (req, res, next) => {
     }
 
     try {
-        // Verify token
         const decoded = jwt.verify(bearerToken, JWT_SECRET);
-        // Add user to request object
         req.user = decoded;
         next();
     } catch (err) {
@@ -46,17 +41,20 @@ const verifyToken = (req, res, next) => {
 
 /**
  * Middleware to verify Admin Role
- * Must be placed AFTER verifyToken
  */
-const verifyAdmin = (req, res, next) => {
+const verifyAdmin = async (req, res, next) => {
     try {
         if (!req.user || !req.user.id) {
             return res.status(401).json({ success: false, message: 'Unauthorized' });
         }
 
-        const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', req.user.id)
+            .single();
 
-        if (!user || user.role !== 'admin') {
+        if (error || !user || user.role !== 'admin') {
             return res.status(403).json({
                 success: false,
                 error: { code: 'FORBIDDEN', message: 'Admin access required' }

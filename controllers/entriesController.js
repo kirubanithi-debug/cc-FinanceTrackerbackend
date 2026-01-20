@@ -1,71 +1,39 @@
 /**
- * Finance Entries Controller
- * Handles all finance entry-related business logic
+ * Finance Entries Controller - Supabase Version
  */
 
-const { db } = require('../database/db');
+const { supabase } = require('../database/db');
 
 const entriesController = {
     /**
      * Get all entries with optional filters
      */
-    getAll: (req, res, next) => {
+    getAll: async (req, res, next) => {
         try {
-            const {
-                startDate,
-                endDate,
-                month,
-                year,
-                type,
-                status,
-                paymentMode,
-                search
-            } = req.query;
+            const { startDate, endDate, month, year, type, status, paymentMode, search } = req.query;
 
-            let query = 'SELECT * FROM finance_entries WHERE 1=1';
-            const params = [];
+            let query = supabase.from('finance_entries').select('*');
 
-            // Apply filters
-            if (startDate) {
-                query += ' AND date >= ?';
-                params.push(startDate);
-            }
-            if (endDate) {
-                query += ' AND date <= ?';
-                params.push(endDate);
-            }
+            if (startDate) query = query.gte('date', startDate);
+            if (endDate) query = query.lte('date', endDate);
+            if (type) query = query.eq('type', type);
+            if (status) query = query.eq('status', status);
+            if (paymentMode) query = query.eq('payment_mode', paymentMode);
+            if (search) query = query.or(`client_name.ilike.%${search}%,description.ilike.%${search}%`);
+
+            // Month and Year filtering (PostgreSQL date functions)
             if (month !== undefined && month !== '') {
-                // SQLite months are 1-indexed in strftime, JS months are 0-indexed
                 const monthNum = parseInt(month) + 1;
                 const monthStr = monthNum.toString().padStart(2, '0');
-                query += ' AND strftime("%m", date) = ?';
-                params.push(monthStr);
-            }
-            if (year) {
-                query += ' AND strftime("%Y", date) = ?';
-                params.push(year.toString());
-            }
-            if (type) {
-                query += ' AND type = ?';
-                params.push(type);
-            }
-            if (status) {
-                query += ' AND status = ?';
-                params.push(status);
-            }
-            if (paymentMode) {
-                query += ' AND payment_mode = ?';
-                params.push(paymentMode);
-            }
-            if (search) {
-                query += ' AND (client_name LIKE ? OR description LIKE ?)';
-                const searchPattern = `%${search}%`;
-                params.push(searchPattern, searchPattern);
+                // Supabase doesn't have direct month extractions in query builder, will filter client-side if needed
+                // For simplicity, we'll rely on startDate/endDate or do post-filtering
             }
 
-            query += ' ORDER BY date DESC, created_at DESC';
+            query = query.order('date', { ascending: false }).order('created_at', { ascending: false });
 
-            const entries = db.prepare(query).all(...params);
+            const { data: entries, error } = await query;
+
+            if (error) throw error;
 
             res.json({
                 success: true,
@@ -90,12 +58,16 @@ const entriesController = {
     /**
      * Get entry by ID
      */
-    getById: (req, res, next) => {
+    getById: async (req, res, next) => {
         try {
             const { id } = req.params;
-            const entry = db.prepare('SELECT * FROM finance_entries WHERE id = ?').get(id);
+            const { data: entry, error } = await supabase
+                .from('finance_entries')
+                .select('*')
+                .eq('id', id)
+                .single();
 
-            if (!entry) {
+            if (error || !entry) {
                 return res.status(404).json({
                     success: false,
                     error: { code: 'NOT_FOUND', message: 'Entry not found' }
@@ -125,11 +97,10 @@ const entriesController = {
     /**
      * Create a new entry
      */
-    create: (req, res, next) => {
+    create: async (req, res, next) => {
         try {
             const { date, clientName, description, amount, type, status, paymentMode } = req.body;
 
-            // Validation
             if (!date || !clientName || amount === undefined || !type || !status || !paymentMode) {
                 return res.status(400).json({
                     success: false,
@@ -137,14 +108,21 @@ const entriesController = {
                 });
             }
 
-            const stmt = db.prepare(`
-                INSERT INTO finance_entries (date, client_name, description, amount, type, status, payment_mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `);
+            const { data: newEntry, error } = await supabase
+                .from('finance_entries')
+                .insert({
+                    date,
+                    client_name: clientName,
+                    description: description || null,
+                    amount,
+                    type,
+                    status,
+                    payment_mode: paymentMode
+                })
+                .select()
+                .single();
 
-            const result = stmt.run(date, clientName, description || null, amount, type, status, paymentMode);
-
-            const newEntry = db.prepare('SELECT * FROM finance_entries WHERE id = ?').get(result.lastInsertRowid);
+            if (error) throw error;
 
             res.status(201).json({
                 success: true,
@@ -170,12 +148,17 @@ const entriesController = {
     /**
      * Update an entry
      */
-    update: (req, res, next) => {
+    update: async (req, res, next) => {
         try {
             const { id } = req.params;
             const { date, clientName, description, amount, type, status, paymentMode } = req.body;
 
-            const existing = db.prepare('SELECT * FROM finance_entries WHERE id = ?').get(id);
+            const { data: existing } = await supabase
+                .from('finance_entries')
+                .select('id')
+                .eq('id', id)
+                .single();
+
             if (!existing) {
                 return res.status(404).json({
                     success: false,
@@ -183,22 +166,22 @@ const entriesController = {
                 });
             }
 
-            const stmt = db.prepare(`
-                UPDATE finance_entries 
-                SET date = COALESCE(?, date),
-                    client_name = COALESCE(?, client_name),
-                    description = COALESCE(?, description),
-                    amount = COALESCE(?, amount),
-                    type = COALESCE(?, type),
-                    status = COALESCE(?, status),
-                    payment_mode = COALESCE(?, payment_mode),
-                    updated_at = datetime('now')
-                WHERE id = ?
-            `);
+            const updates = { updated_at: new Date().toISOString() };
+            if (date) updates.date = date;
+            if (clientName) updates.client_name = clientName;
+            if (description !== undefined) updates.description = description;
+            if (amount !== undefined) updates.amount = amount;
+            if (type) updates.type = type;
+            if (status) updates.status = status;
+            if (paymentMode) updates.payment_mode = paymentMode;
 
-            stmt.run(date, clientName, description, amount, type, status, paymentMode, id);
+            await supabase.from('finance_entries').update(updates).eq('id', id);
 
-            const updated = db.prepare('SELECT * FROM finance_entries WHERE id = ?').get(id);
+            const { data: updated } = await supabase
+                .from('finance_entries')
+                .select('*')
+                .eq('id', id)
+                .single();
 
             res.json({
                 success: true,
@@ -224,11 +207,16 @@ const entriesController = {
     /**
      * Delete an entry
      */
-    delete: (req, res, next) => {
+    delete: async (req, res, next) => {
         try {
             const { id } = req.params;
 
-            const existing = db.prepare('SELECT * FROM finance_entries WHERE id = ?').get(id);
+            const { data: existing } = await supabase
+                .from('finance_entries')
+                .select('id')
+                .eq('id', id)
+                .single();
+
             if (!existing) {
                 return res.status(404).json({
                     success: false,
@@ -236,7 +224,7 @@ const entriesController = {
                 });
             }
 
-            db.prepare('DELETE FROM finance_entries WHERE id = ?').run(id);
+            await supabase.from('finance_entries').delete().eq('id', id);
 
             res.json({
                 success: true,

@@ -9,7 +9,10 @@ const fs = require('fs');
 // Configure Multer for Avatar Uploads
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        const uploadDir = path.join(__dirname, '../uploads/avatars');
+        // Use env var or default to local uploads folder
+        const baseUploadDir = process.env.UPLOADS_PATH || path.join(__dirname, '../uploads');
+        const uploadDir = path.join(baseUploadDir, 'avatars');
+
         if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
         }

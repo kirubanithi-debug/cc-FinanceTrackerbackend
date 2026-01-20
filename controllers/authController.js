@@ -1,34 +1,46 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { db } = require('../database/db');
+const { supabase } = require('../database/db');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
-// Email Transporter (Mock for now, replace with real credentials)
+// Email Transporter (Production Configuration)
 const transporter = nodemailer.createTransport({
-    host: 'smtp.ethereal.email',
-    port: 587,
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: process.env.SMTP_PORT || 587,
+    secure: process.env.SMTP_SECURE === 'true',
     auth: {
-        user: 'ethereal.user', // Replace with real one
-        pass: 'ethereal.pass'
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
     }
 });
+
+const JWT_SECRET = process.env.JWT_SECRET || 'financeflow-secret-key-change-it-in-prod';
 
 // Helper to send email
 async function sendEmail(to, subject, text, html) {
     try {
-        console.log(`📧 Simulation: Sending email to ${to}`);
-        console.log(`Subject: ${subject}`);
-        console.log(`Body: ${text}`);
-        // In production: await transporter.sendMail({ from: '"FinanceFlow" <noreply@financeflow.com>', to, subject, text, html });
+        console.log(`📧 Sending email to ${to}`);
+
+        if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+            console.warn('⚠️ SMTP credentials missing. Email not sent (Logged only).');
+            return true;
+        }
+
+        await transporter.sendMail({
+            from: process.env.SMTP_FROM || `"FinanceFlow" <${process.env.SMTP_USER}>`,
+            to,
+            subject,
+            text,
+            html
+        });
+        console.log('✅ Email sent successfully');
         return true;
     } catch (error) {
         console.error('Email send failed:', error);
         return false;
     }
 }
-
-const JWT_SECRET = process.env.JWT_SECRET || 'financeflow-secret-key-change-it-in-prod';
 
 /**
  * Register a new user
@@ -37,7 +49,6 @@ exports.signup = async (req, res, next) => {
     try {
         const { name, email, password } = req.body;
 
-        // Basic validation
         if (!name || !email || !password) {
             return res.status(400).json({
                 success: false,
@@ -45,7 +56,6 @@ exports.signup = async (req, res, next) => {
             });
         }
 
-        // Email format validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
             return res.status(400).json({
@@ -55,7 +65,12 @@ exports.signup = async (req, res, next) => {
         }
 
         // Check if email exists
-        const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+        const { data: existingUser } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', email)
+            .single();
+
         if (existingUser) {
             return res.status(409).json({
                 success: false,
@@ -70,18 +85,28 @@ exports.signup = async (req, res, next) => {
         // Generate Verification Token
         const verificationToken = crypto.randomBytes(32).toString('hex');
 
-        // Insert user (is_verified = 0 by default)
-        const stmt = db.prepare('INSERT INTO users (name, email, password, verification_token, is_verified) VALUES (?, ?, ?, ?, 0)');
-        const result = stmt.run(name, email, hashedPassword, verificationToken);
+        // Insert user
+        const { data: newUser, error } = await supabase
+            .from('users')
+            .insert({
+                name,
+                email,
+                password: hashedPassword,
+                verification_token: verificationToken,
+                is_verified: 0
+            })
+            .select()
+            .single();
+
+        if (error) throw error;
 
         // Send Verification Email
-        const verifyLink = `http://localhost:3000/verify?token=${verificationToken}`; // Adjust domain in prod
+        const verifyLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify?token=${verificationToken}`;
         await sendEmail(email, 'Verify your Email', `Please click here to verify: ${verifyLink}`, `<a href="${verifyLink}">Verify Email</a>`);
 
         res.status(201).json({
             success: true,
-            message: 'User registered. Please check your email to verify account.',
-            // userId: result.lastInsertRowid // Optional
+            message: 'User registered. Please check your email to verify account.'
         });
 
     } catch (error) {
@@ -106,8 +131,13 @@ exports.login = async (req, res, next) => {
         }
 
         // Find user
-        const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-        if (!user) {
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('email', email)
+            .single();
+
+        if (error || !user) {
             return res.status(401).json({
                 success: false,
                 error: { code: 'AUTH_ERROR', message: 'Invalid email or password' }
@@ -132,28 +162,21 @@ exports.login = async (req, res, next) => {
         }
 
         // New Device Detection
-        const knownDevice = db.prepare('SELECT id FROM login_history WHERE user_id = ? AND user_agent = ?').get(user.id, userAgent);
+        const { data: knownDevice } = await supabase
+            .from('login_history')
+            .select('id')
+            .eq('user_id', user.id)
+            .eq('user_agent', userAgent)
+            .single();
 
-        // If not a known device (or first time), trigger OTP. 
-        // Note: For simplicity, if it's the very first login ever, we might want to skip OTP, but strictly "new device" means "never seen".
-        // Let's implement a strict check: if history exists for user but not this device => OTP.
-        // Or if simple "New Device" logic requested: always check history.
-        // If login_history is empty for user, is it a new device? Technically yes. 
-        // But maybe we can auto-trust the very first login after verification (optional optimization).
-        // For now, I'll follow strict "New Device" logic.
-
-        let requiresOtp = false;
         if (!knownDevice) {
-            // Check if user has ANY history. If not, maybe we trust this first device? 
-            // Logic: "Login flow now handles requiresOtp response... If New Device: Generate OTP."
-            requiresOtp = true;
-        }
-
-        if (requiresOtp) {
             const otp = Math.floor(100000 + Math.random() * 900000).toString();
-            const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 mins
+            const otpExpiry = Date.now() + 10 * 60 * 1000;
 
-            db.prepare('UPDATE users SET otp = ?, otp_expiry = ? WHERE id = ?').run(otp, otpExpiry, user.id);
+            await supabase
+                .from('users')
+                .update({ otp, otp_expiry: otpExpiry })
+                .eq('id', user.id);
 
             await sendEmail(user.email, 'Login OTP', `Your OTP is: ${otp}`, `<p>Your OTP is: <strong>${otp}</strong></p>`);
 
@@ -165,7 +188,11 @@ exports.login = async (req, res, next) => {
         }
 
         // Record Login
-        db.prepare('INSERT INTO login_history (user_id, ip_address, user_agent) VALUES (?, ?, ?)').run(user.id, ipAddress, userAgent);
+        await supabase.from('login_history').insert({
+            user_id: user.id,
+            ip_address: ipAddress,
+            user_agent: userAgent
+        });
 
         // Create token
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
@@ -185,10 +212,15 @@ exports.login = async (req, res, next) => {
 /**
  * Get current user info
  */
-exports.getMe = (req, res, next) => {
+exports.getMe = async (req, res, next) => {
     try {
-        const user = db.prepare('SELECT id, name, email, phone, avatar, created_at FROM users WHERE id = ?').get(req.user.id);
-        if (!user) {
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('id, name, email, phone, avatar, created_at')
+            .eq('id', req.user.id)
+            .single();
+
+        if (error || !user) {
             return res.status(404).json({
                 success: false,
                 error: { code: 'NOT_FOUND', message: 'User not found' }
@@ -208,21 +240,28 @@ exports.updateProfile = async (req, res, next) => {
         const { name, email, phone, currentPassword, newPassword } = req.body;
         const userId = req.user.id;
 
-        // Get current user
-        const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-        if (!user) {
+        const { data: user, error: fetchError } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', userId)
+            .single();
+
+        if (fetchError || !user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
-        // Email update check
         if (email && email !== user.email) {
-            const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+            const { data: exists } = await supabase
+                .from('users')
+                .select('id')
+                .eq('email', email)
+                .single();
+
             if (exists) {
                 return res.status(409).json({ success: false, message: 'Email already in use' });
             }
         }
 
-        // Password update check
         let passwordHash = user.password;
         if (newPassword) {
             if (!currentPassword) {
@@ -236,28 +275,22 @@ exports.updateProfile = async (req, res, next) => {
             passwordHash = await bcrypt.hash(newPassword, salt);
         }
 
-        // Update DB
-        // Note: Avatar is handled by separate endpoint now, but we'll leave it in query in case manual text update used?
-        // Actually, user text updates shouldn't touch avatar unless specified.
-        // We'll remove avatar from this generic update to avoid issues, or support it if sent as text (URL).
-        // The user mentioned "Profile Update (Fix Crash): likely crashes on large Body (Base64)... Recommended: dedicated ... endpoint".
-        // So I will remove `avatar` from input here, or check if it's a URL. 
-        // I'll leave it but only if it's small? No, safer to just rely on the other endpoint for files.
-        // If the frontend sends safety text updates, it probably excludes avatar now.
+        const updates = {};
+        if (name) updates.name = name;
+        if (email) updates.email = email;
+        if (phone) updates.phone = phone;
+        updates.password = passwordHash;
 
-        const stmt = db.prepare(`
-            UPDATE users 
-            SET name = COALESCE(?, name), 
-                email = COALESCE(?, email), 
-                phone = COALESCE(?, phone),
-                password = ? 
-            WHERE id = ?
-        `);
+        await supabase
+            .from('users')
+            .update(updates)
+            .eq('id', userId);
 
-        stmt.run(name || null, email || null, phone || null, passwordHash, userId);
-
-        // Fetch updated user
-        const updatedUser = db.prepare('SELECT id, name, email, phone, avatar, created_at FROM users WHERE id = ?').get(userId);
+        const { data: updatedUser } = await supabase
+            .from('users')
+            .select('id, name, email, phone, avatar, created_at')
+            .eq('id', userId)
+            .single();
 
         res.json({
             success: true,
@@ -283,8 +316,13 @@ exports.verifyOtp = async (req, res, next) => {
             return res.status(400).json({ success: false, message: 'Email and OTP required' });
         }
 
-        const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-        if (!user) {
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('email', email)
+            .single();
+
+        if (error || !user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
@@ -292,19 +330,23 @@ exports.verifyOtp = async (req, res, next) => {
             return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
         }
 
-        // Clear OTP & Verify User (if not already)
-        db.prepare('UPDATE users SET otp = NULL, otp_expiry = NULL, is_verified = 1 WHERE id = ?').run(user.id);
+        await supabase
+            .from('users')
+            .update({ otp: null, otp_expiry: null, is_verified: 1 })
+            .eq('id', user.id);
 
-        // Record Device
-        db.prepare('INSERT INTO login_history (user_id, ip_address, user_agent) VALUES (?, ?, ?)').run(user.id, ipAddress, userAgent);
+        await supabase.from('login_history').insert({
+            user_id: user.id,
+            ip_address: ipAddress,
+            user_agent: userAgent
+        });
 
-        // Generate Token
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
 
         res.json({
             success: true,
             token,
-            user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar }, // Include avatar
+            user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar },
             message: 'OTP verified, login successful'
         });
 
@@ -321,16 +363,23 @@ exports.forgotPassword = async (req, res, next) => {
         const { email } = req.body;
         if (!email) return res.status(400).json({ success: false, message: 'Email required' });
 
-        const user = db.prepare('SELECT id, name FROM users WHERE email = ?').get(email);
-        // Always return success even if user not found (security)
+        const { data: user } = await supabase
+            .from('users')
+            .select('id, name')
+            .eq('email', email)
+            .single();
+
         if (!user) {
             return res.json({ success: true, message: 'If account exists, reset link sent.' });
         }
 
         const resetToken = crypto.randomBytes(32).toString('hex');
-        const expiry = Date.now() + 60 * 60 * 1000; // 1 hr
+        const expiry = Date.now() + 60 * 60 * 1000;
 
-        db.prepare('UPDATE users SET reset_token = ?, reset_token_expiry = ? WHERE id = ?').run(resetToken, expiry, user.id);
+        await supabase
+            .from('users')
+            .update({ reset_token: resetToken, reset_token_expiry: expiry })
+            .eq('id', user.id);
 
         await sendEmail(email, 'Reset Password', `Use this token to reset: ${resetToken}`, `<p>Reset Token: <strong>${resetToken}</strong></p>`);
 
@@ -353,9 +402,16 @@ exports.uploadAvatar = async (req, res, next) => {
         const avatarUrl = `/uploads/avatars/${req.file.filename}`;
         const userId = req.user.id;
 
-        db.prepare('UPDATE users SET avatar = ? WHERE id = ?').run(avatarUrl, userId);
+        await supabase
+            .from('users')
+            .update({ avatar: avatarUrl })
+            .eq('id', userId);
 
-        const user = db.prepare('SELECT id, name, email, phone, avatar FROM users WHERE id = ?').get(userId);
+        const { data: user } = await supabase
+            .from('users')
+            .select('id, name, email, phone, avatar')
+            .eq('id', userId)
+            .single();
 
         res.json({
             success: true,

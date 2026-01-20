@@ -1,54 +1,27 @@
 /**
- * Analytics Controller
- * Handles financial analytics and reporting
+ * Analytics Controller - Supabase Version
  */
 
-const { db } = require('../database/db');
+const { supabase } = require('../database/db');
 
 const analyticsController = {
     /**
      * Get financial summary
      */
-    getFinancialSummary: (req, res, next) => {
+    getFinancialSummary: async (req, res, next) => {
         try {
-            const { startDate, endDate, month, year, type, status, paymentMode } = req.query;
+            const { startDate, endDate, type, status, paymentMode } = req.query;
 
-            let query = 'SELECT * FROM finance_entries WHERE 1=1';
-            const params = [];
+            let query = supabase.from('finance_entries').select('*');
 
-            // Apply filters
-            if (startDate) {
-                query += ' AND date >= ?';
-                params.push(startDate);
-            }
-            if (endDate) {
-                query += ' AND date <= ?';
-                params.push(endDate);
-            }
-            if (month !== undefined && month !== '') {
-                const monthNum = parseInt(month) + 1;
-                const monthStr = monthNum.toString().padStart(2, '0');
-                query += ' AND strftime("%m", date) = ?';
-                params.push(monthStr);
-            }
-            if (year) {
-                query += ' AND strftime("%Y", date) = ?';
-                params.push(year.toString());
-            }
-            if (type) {
-                query += ' AND type = ?';
-                params.push(type);
-            }
-            if (status) {
-                query += ' AND status = ?';
-                params.push(status);
-            }
-            if (paymentMode) {
-                query += ' AND payment_mode = ?';
-                params.push(paymentMode);
-            }
+            if (startDate) query = query.gte('date', startDate);
+            if (endDate) query = query.lte('date', endDate);
+            if (type) query = query.eq('type', type);
+            if (status) query = query.eq('status', status);
+            if (paymentMode) query = query.eq('payment_mode', paymentMode);
 
-            const entries = db.prepare(query).all(...params);
+            const { data: entries, error } = await query;
+            if (error) throw error;
 
             const summary = {
                 totalIncome: 0,
@@ -58,9 +31,8 @@ const analyticsController = {
                 netBalance: 0
             };
 
-            entries.forEach(entry => {
+            (entries || []).forEach(entry => {
                 const amount = entry.amount || 0;
-
                 if (entry.type === 'income') {
                     summary.totalIncome += amount;
                     if (entry.status === 'pending') {
@@ -75,10 +47,7 @@ const analyticsController = {
 
             summary.netBalance = summary.totalIncome - summary.totalExpense;
 
-            res.json({
-                success: true,
-                data: summary
-            });
+            res.json({ success: true, data: summary });
         } catch (error) {
             next(error);
         }
@@ -87,22 +56,23 @@ const analyticsController = {
     /**
      * Get monthly data for a specific year
      */
-    getMonthlyData: (req, res, next) => {
+    getMonthlyData: async (req, res, next) => {
         try {
             const { year } = req.params;
 
-            const entries = db.prepare(`
-                SELECT * FROM finance_entries 
-                WHERE strftime('%Y', date) = ?
-            `).all(year.toString());
+            const { data: entries, error } = await supabase
+                .from('finance_entries')
+                .select('*')
+                .gte('date', `${year}-01-01`)
+                .lte('date', `${year}-12-31`);
 
-            // Initialize monthly data array (12 months)
+            if (error) throw error;
+
             const monthlyData = Array(12).fill(null).map(() => ({ income: 0, expense: 0 }));
 
-            entries.forEach(entry => {
+            (entries || []).forEach(entry => {
                 const month = new Date(entry.date).getMonth();
                 const amount = entry.amount || 0;
-
                 if (entry.type === 'income') {
                     monthlyData[month].income += amount;
                 } else {
@@ -110,10 +80,7 @@ const analyticsController = {
                 }
             });
 
-            res.json({
-                success: true,
-                data: monthlyData
-            });
+            res.json({ success: true, data: monthlyData });
         } catch (error) {
             next(error);
         }
@@ -122,41 +89,35 @@ const analyticsController = {
     /**
      * Get payment mode distribution
      */
-    getPaymentModeDistribution: (req, res, next) => {
+    getPaymentModeDistribution: async (req, res, next) => {
         try {
-            const entries = db.prepare('SELECT * FROM finance_entries').all();
+            const { data: entries, error } = await supabase.from('finance_entries').select('*');
+            if (error) throw error;
 
             const distribution = {};
-
-            entries.forEach(entry => {
+            (entries || []).forEach(entry => {
                 const mode = entry.payment_mode || 'other';
                 const amount = entry.amount || 0;
-
-                if (!distribution[mode]) {
-                    distribution[mode] = 0;
-                }
+                if (!distribution[mode]) distribution[mode] = 0;
                 distribution[mode] += amount;
             });
 
-            res.json({
-                success: true,
-                data: distribution
-            });
+            res.json({ success: true, data: distribution });
         } catch (error) {
             next(error);
         }
     },
 
     /**
-     * Get status distribution (pending vs received)
+     * Get status distribution
      */
-    getStatusDistribution: (req, res, next) => {
+    getStatusDistribution: async (req, res, next) => {
         try {
-            const entries = db.prepare('SELECT * FROM finance_entries').all();
+            const { data: entries, error } = await supabase.from('finance_entries').select('*');
+            if (error) throw error;
 
             const distribution = { pending: 0, received: 0 };
-
-            entries.forEach(entry => {
+            (entries || []).forEach(entry => {
                 const amount = entry.amount || 0;
                 if (entry.status === 'pending') {
                     distribution.pending += amount;
@@ -165,10 +126,7 @@ const analyticsController = {
                 }
             });
 
-            res.json({
-                success: true,
-                data: distribution
-            });
+            res.json({ success: true, data: distribution });
         } catch (error) {
             next(error);
         }
@@ -177,20 +135,16 @@ const analyticsController = {
     /**
      * Get yearly revenue data
      */
-    getYearlyRevenue: (req, res, next) => {
+    getYearlyRevenue: async (req, res, next) => {
         try {
-            const entries = db.prepare('SELECT * FROM finance_entries').all();
+            const { data: entries, error } = await supabase.from('finance_entries').select('*');
+            if (error) throw error;
 
             const yearlyData = {};
-
-            entries.forEach(entry => {
+            (entries || []).forEach(entry => {
                 const year = new Date(entry.date).getFullYear();
                 const amount = entry.amount || 0;
-
-                if (!yearlyData[year]) {
-                    yearlyData[year] = { income: 0, expense: 0 };
-                }
-
+                if (!yearlyData[year]) yearlyData[year] = { income: 0, expense: 0 };
                 if (entry.type === 'income') {
                     yearlyData[year].income += amount;
                 } else {
@@ -198,10 +152,7 @@ const analyticsController = {
                 }
             });
 
-            res.json({
-                success: true,
-                data: yearlyData
-            });
+            res.json({ success: true, data: yearlyData });
         } catch (error) {
             next(error);
         }

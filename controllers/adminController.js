@@ -1,24 +1,41 @@
-const { db } = require('../database/db');
+/**
+ * Admin Controller - Supabase Version
+ */
+
+const { supabase } = require('../database/db');
 
 const adminController = {
     /**
      * List all users
      */
-    getAllUsers: (req, res, next) => {
+    getAllUsers: async (req, res, next) => {
         try {
-            // Fetch users with their last login info
-            const users = db.prepare(`
-                SELECT 
-                    u.id, u.name, u.email, u.role, u.is_verified, 
-                    u.created_at, 
-                    (SELECT created_at FROM login_history WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1) as last_login
-                FROM users u
-                ORDER BY u.created_at DESC
-            `).all();
+            const { data: users, error } = await supabase
+                .from('users')
+                .select('id, name, email, role, is_verified, created_at')
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+
+            // Get last login for each user
+            const enrichedUsers = await Promise.all(users.map(async (user) => {
+                const { data: lastLogin } = await supabase
+                    .from('login_history')
+                    .select('created_at')
+                    .eq('user_id', user.id)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                return {
+                    ...user,
+                    last_login: lastLogin ? lastLogin.created_at : null
+                };
+            }));
 
             res.json({
                 success: true,
-                data: users
+                data: enrichedUsers
             });
         } catch (error) {
             next(error);
@@ -28,26 +45,29 @@ const adminController = {
     /**
      * Delete a user
      */
-    deleteUser: (req, res, next) => {
+    deleteUser: async (req, res, next) => {
         try {
             const { id } = req.params;
 
-            // Prevent deleting self
             if (parseInt(id) === req.user.id) {
                 return res.status(400).json({ success: false, message: 'Cannot delete your own admin account.' });
             }
 
-            const user = db.prepare('SELECT id FROM users WHERE id = ?').get(id);
+            const { data: user } = await supabase
+                .from('users')
+                .select('id')
+                .eq('id', id)
+                .single();
+
             if (!user) {
                 return res.status(404).json({ success: false, message: 'User not found' });
             }
 
-            // Delete user (Cascading delete handles login_history, but clients are kept)
-            db.prepare('DELETE FROM users WHERE id = ?').run(id);
+            await supabase.from('users').delete().eq('id', id);
 
             res.json({
                 success: true,
-                message: 'User deleted successfully. (Related data retained due to shared model)'
+                message: 'User deleted successfully.'
             });
         } catch (error) {
             next(error);

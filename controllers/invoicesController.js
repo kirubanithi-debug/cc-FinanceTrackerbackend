@@ -1,26 +1,29 @@
 /**
- * Invoices Controller
- * Handles all invoice-related business logic
+ * Invoices Controller - Supabase Version
  */
 
-const { db } = require('../database/db');
+const { supabase } = require('../database/db');
 
 const invoicesController = {
     /**
      * Get all invoices
      */
-    getAll: (req, res, next) => {
+    getAll: async (req, res, next) => {
         try {
-            const invoices = db.prepare(`
-                SELECT * FROM invoices 
-                ORDER BY invoice_date DESC, created_at DESC
-            `).all();
+            const { data: invoices, error } = await supabase
+                .from('invoices')
+                .select('*')
+                .order('invoice_date', { ascending: false })
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
 
             // Get services for each invoice
-            const result = invoices.map(inv => {
-                const services = db.prepare(`
-                    SELECT * FROM invoice_services WHERE invoice_id = ?
-                `).all(inv.id);
+            const result = await Promise.all(invoices.map(async (inv) => {
+                const { data: services } = await supabase
+                    .from('invoice_services')
+                    .select('*')
+                    .eq('invoice_id', inv.id);
 
                 return {
                     id: inv.id,
@@ -41,7 +44,7 @@ const invoicesController = {
                     discountAmount: inv.discount_amount,
                     grandTotal: inv.grand_total,
                     paymentStatus: inv.payment_status,
-                    services: services.map(s => ({
+                    services: (services || []).map(s => ({
                         id: s.id,
                         name: s.name,
                         quantity: s.quantity,
@@ -51,12 +54,9 @@ const invoicesController = {
                     createdAt: inv.created_at,
                     updatedAt: inv.updated_at
                 };
-            });
+            }));
 
-            res.json({
-                success: true,
-                data: result
-            });
+            res.json({ success: true, data: result });
         } catch (error) {
             next(error);
         }
@@ -65,19 +65,26 @@ const invoicesController = {
     /**
      * Get invoice by ID
      */
-    getById: (req, res, next) => {
+    getById: async (req, res, next) => {
         try {
             const { id } = req.params;
-            const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+            const { data: invoice, error } = await supabase
+                .from('invoices')
+                .select('*')
+                .eq('id', id)
+                .single();
 
-            if (!invoice) {
+            if (error || !invoice) {
                 return res.status(404).json({
                     success: false,
                     error: { code: 'NOT_FOUND', message: 'Invoice not found' }
                 });
             }
 
-            const services = db.prepare('SELECT * FROM invoice_services WHERE invoice_id = ?').all(id);
+            const { data: services } = await supabase
+                .from('invoice_services')
+                .select('*')
+                .eq('invoice_id', id);
 
             res.json({
                 success: true,
@@ -100,7 +107,7 @@ const invoicesController = {
                     discountAmount: invoice.discount_amount,
                     grandTotal: invoice.grand_total,
                     paymentStatus: invoice.payment_status,
-                    services: services.map(s => ({
+                    services: (services || []).map(s => ({
                         id: s.id,
                         name: s.name,
                         quantity: s.quantity,
@@ -119,12 +126,14 @@ const invoicesController = {
     /**
      * Get next invoice number
      */
-    getNextNumber: (req, res, next) => {
+    getNextNumber: async (req, res, next) => {
         try {
-            const lastInvoice = db.prepare(`
-                SELECT invoice_number FROM invoices 
-                ORDER BY id DESC LIMIT 1
-            `).get();
+            const { data: lastInvoice } = await supabase
+                .from('invoices')
+                .select('invoice_number')
+                .order('id', { ascending: false })
+                .limit(1)
+                .single();
 
             let nextNumber = 'INV-0001';
 
@@ -136,10 +145,7 @@ const invoicesController = {
                 }
             }
 
-            res.json({
-                success: true,
-                data: { invoiceNumber: nextNumber }
-            });
+            res.json({ success: true, data: { invoiceNumber: nextNumber } });
         } catch (error) {
             next(error);
         }
@@ -148,30 +154,15 @@ const invoicesController = {
     /**
      * Create a new invoice
      */
-    create: (req, res, next) => {
+    create: async (req, res, next) => {
         try {
             const {
-                invoiceNumber,
-                agencyName,
-                agencyContact,
-                agencyAddress,
-                agencyLogo,
-                clientName,
-                clientPhone,
-                clientAddress,
-                invoiceDate,
-                dueDate,
-                subtotal,
-                taxPercent,
-                taxAmount,
-                discountPercent,
-                discountAmount,
-                grandTotal,
-                paymentStatus,
-                services
+                invoiceNumber, agencyName, agencyContact, agencyAddress, agencyLogo,
+                clientName, clientPhone, clientAddress, invoiceDate, dueDate,
+                subtotal, taxPercent, taxAmount, discountPercent, discountAmount,
+                grandTotal, paymentStatus, services
             } = req.body;
 
-            // Validation
             if (!invoiceNumber || !clientName || !invoiceDate || !dueDate) {
                 return res.status(400).json({
                     success: false,
@@ -179,66 +170,49 @@ const invoicesController = {
                 });
             }
 
-            // Use a transaction for invoice + services
-            const insertInvoice = db.transaction(() => {
-                // Insert invoice
-                const invoiceStmt = db.prepare(`
-                    INSERT INTO invoices (
-                        invoice_number, agency_name, agency_contact, agency_address, agency_logo,
-                        client_name, client_phone, client_address, invoice_date, due_date,
-                        subtotal, tax_percent, tax_amount, discount_percent, discount_amount,
-                        grand_total, payment_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                `);
+            // Insert invoice
+            const { data: newInvoice, error } = await supabase
+                .from('invoices')
+                .insert({
+                    invoice_number: invoiceNumber,
+                    agency_name: agencyName || null,
+                    agency_contact: agencyContact || null,
+                    agency_address: agencyAddress || null,
+                    agency_logo: agencyLogo || null,
+                    client_name: clientName,
+                    client_phone: clientPhone || null,
+                    client_address: clientAddress || null,
+                    invoice_date: invoiceDate,
+                    due_date: dueDate,
+                    subtotal: subtotal || 0,
+                    tax_percent: taxPercent || 0,
+                    tax_amount: taxAmount || 0,
+                    discount_percent: discountPercent || 0,
+                    discount_amount: discountAmount || 0,
+                    grand_total: grandTotal || 0,
+                    payment_status: paymentStatus || 'pending'
+                })
+                .select()
+                .single();
 
-                const invoiceResult = invoiceStmt.run(
-                    invoiceNumber,
-                    agencyName || null,
-                    agencyContact || null,
-                    agencyAddress || null,
-                    agencyLogo || null,
-                    clientName,
-                    clientPhone || null,
-                    clientAddress || null,
-                    invoiceDate,
-                    dueDate,
-                    subtotal || 0,
-                    taxPercent || 0,
-                    taxAmount || 0,
-                    discountPercent || 0,
-                    discountAmount || 0,
-                    grandTotal || 0,
-                    paymentStatus || 'pending'
-                );
+            if (error) throw error;
 
-                const invoiceId = invoiceResult.lastInsertRowid;
+            // Insert services
+            if (services && services.length > 0) {
+                const serviceInserts = services.map(s => ({
+                    invoice_id: newInvoice.id,
+                    name: s.name,
+                    quantity: s.quantity || 1,
+                    rate: s.rate || 0,
+                    amount: s.amount || 0
+                }));
+                await supabase.from('invoice_services').insert(serviceInserts);
+            }
 
-                // Insert services
-                if (services && services.length > 0) {
-                    const serviceStmt = db.prepare(`
-                        INSERT INTO invoice_services (invoice_id, name, quantity, rate, amount)
-                        VALUES (?, ?, ?, ?, ?)
-                    `);
-
-                    for (const service of services) {
-                        serviceStmt.run(
-                            invoiceId,
-                            service.name,
-                            service.quantity || 1,
-                            service.rate || 0,
-                            service.amount || 0
-                        );
-                    }
-                }
-
-                return invoiceId;
-            });
-
-            const newInvoiceId = insertInvoice();
-
-            // Fetch the created invoice
-            const newInvoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(newInvoiceId);
-            const newServices = db.prepare('SELECT * FROM invoice_services WHERE invoice_id = ?').all(newInvoiceId);
+            const { data: newServices } = await supabase
+                .from('invoice_services')
+                .select('*')
+                .eq('invoice_id', newInvoice.id);
 
             res.status(201).json({
                 success: true,
@@ -246,30 +220,13 @@ const invoicesController = {
                     id: newInvoice.id,
                     invoiceNumber: newInvoice.invoice_number,
                     agencyName: newInvoice.agency_name,
-                    agencyContact: newInvoice.agency_contact,
-                    agencyAddress: newInvoice.agency_address,
-                    agencyLogo: newInvoice.agency_logo,
                     clientName: newInvoice.client_name,
-                    clientPhone: newInvoice.client_phone,
-                    clientAddress: newInvoice.client_address,
-                    invoiceDate: newInvoice.invoice_date,
-                    dueDate: newInvoice.due_date,
-                    subtotal: newInvoice.subtotal,
-                    taxPercent: newInvoice.tax_percent,
-                    taxAmount: newInvoice.tax_amount,
-                    discountPercent: newInvoice.discount_percent,
-                    discountAmount: newInvoice.discount_amount,
                     grandTotal: newInvoice.grand_total,
                     paymentStatus: newInvoice.payment_status,
-                    services: newServices.map(s => ({
-                        id: s.id,
-                        name: s.name,
-                        quantity: s.quantity,
-                        rate: s.rate,
-                        amount: s.amount
+                    services: (newServices || []).map(s => ({
+                        id: s.id, name: s.name, quantity: s.quantity, rate: s.rate, amount: s.amount
                     })),
-                    createdAt: newInvoice.created_at,
-                    updatedAt: newInvoice.updated_at
+                    createdAt: newInvoice.created_at
                 },
                 message: 'Invoice created successfully'
             });
@@ -281,30 +238,22 @@ const invoicesController = {
     /**
      * Update an invoice
      */
-    update: (req, res, next) => {
+    update: async (req, res, next) => {
         try {
             const { id } = req.params;
             const {
-                agencyName,
-                agencyContact,
-                agencyAddress,
-                agencyLogo,
-                clientName,
-                clientPhone,
-                clientAddress,
-                invoiceDate,
-                dueDate,
-                subtotal,
-                taxPercent,
-                taxAmount,
-                discountPercent,
-                discountAmount,
-                grandTotal,
-                paymentStatus,
-                services
+                agencyName, agencyContact, agencyAddress, agencyLogo,
+                clientName, clientPhone, clientAddress, invoiceDate, dueDate,
+                subtotal, taxPercent, taxAmount, discountPercent, discountAmount,
+                grandTotal, paymentStatus, services
             } = req.body;
 
-            const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+            const { data: existing } = await supabase
+                .from('invoices')
+                .select('id')
+                .eq('id', id)
+                .single();
+
             if (!existing) {
                 return res.status(404).json({
                     success: false,
@@ -312,87 +261,63 @@ const invoicesController = {
                 });
             }
 
-            const updateInvoice = db.transaction(() => {
-                // Update invoice
-                db.prepare(`
-                    UPDATE invoices SET
-                        agency_name = COALESCE(?, agency_name),
-                        agency_contact = COALESCE(?, agency_contact),
-                        agency_address = COALESCE(?, agency_address),
-                        agency_logo = COALESCE(?, agency_logo),
-                        client_name = COALESCE(?, client_name),
-                        client_phone = COALESCE(?, client_phone),
-                        client_address = COALESCE(?, client_address),
-                        invoice_date = COALESCE(?, invoice_date),
-                        due_date = COALESCE(?, due_date),
-                        subtotal = COALESCE(?, subtotal),
-                        tax_percent = COALESCE(?, tax_percent),
-                        tax_amount = COALESCE(?, tax_amount),
-                        discount_percent = COALESCE(?, discount_percent),
-                        discount_amount = COALESCE(?, discount_amount),
-                        grand_total = COALESCE(?, grand_total),
-                        payment_status = COALESCE(?, payment_status),
-                        updated_at = datetime('now')
-                    WHERE id = ?
-                `).run(
-                    agencyName, agencyContact, agencyAddress, agencyLogo,
-                    clientName, clientPhone, clientAddress, invoiceDate, dueDate,
-                    subtotal, taxPercent, taxAmount, discountPercent, discountAmount,
-                    grandTotal, paymentStatus, id
-                );
+            const updates = { updated_at: new Date().toISOString() };
+            if (agencyName !== undefined) updates.agency_name = agencyName;
+            if (agencyContact !== undefined) updates.agency_contact = agencyContact;
+            if (agencyAddress !== undefined) updates.agency_address = agencyAddress;
+            if (agencyLogo !== undefined) updates.agency_logo = agencyLogo;
+            if (clientName !== undefined) updates.client_name = clientName;
+            if (clientPhone !== undefined) updates.client_phone = clientPhone;
+            if (clientAddress !== undefined) updates.client_address = clientAddress;
+            if (invoiceDate !== undefined) updates.invoice_date = invoiceDate;
+            if (dueDate !== undefined) updates.due_date = dueDate;
+            if (subtotal !== undefined) updates.subtotal = subtotal;
+            if (taxPercent !== undefined) updates.tax_percent = taxPercent;
+            if (taxAmount !== undefined) updates.tax_amount = taxAmount;
+            if (discountPercent !== undefined) updates.discount_percent = discountPercent;
+            if (discountAmount !== undefined) updates.discount_amount = discountAmount;
+            if (grandTotal !== undefined) updates.grand_total = grandTotal;
+            if (paymentStatus !== undefined) updates.payment_status = paymentStatus;
 
-                // Update services if provided
-                if (services) {
-                    // Delete existing services
-                    db.prepare('DELETE FROM invoice_services WHERE invoice_id = ?').run(id);
+            await supabase.from('invoices').update(updates).eq('id', id);
 
-                    // Insert new services
-                    const serviceStmt = db.prepare(`
-                        INSERT INTO invoice_services (invoice_id, name, quantity, rate, amount)
-                        VALUES (?, ?, ?, ?, ?)
-                    `);
-
-                    for (const service of services) {
-                        serviceStmt.run(id, service.name, service.quantity, service.rate, service.amount);
-                    }
+            // Update services if provided
+            if (services) {
+                await supabase.from('invoice_services').delete().eq('invoice_id', id);
+                if (services.length > 0) {
+                    const serviceInserts = services.map(s => ({
+                        invoice_id: parseInt(id),
+                        name: s.name,
+                        quantity: s.quantity || 1,
+                        rate: s.rate || 0,
+                        amount: s.amount || 0
+                    }));
+                    await supabase.from('invoice_services').insert(serviceInserts);
                 }
-            });
+            }
 
-            updateInvoice();
+            const { data: updated } = await supabase
+                .from('invoices')
+                .select('*')
+                .eq('id', id)
+                .single();
 
-            // Fetch updated invoice
-            const updated = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
-            const updatedServices = db.prepare('SELECT * FROM invoice_services WHERE invoice_id = ?').all(id);
+            const { data: updatedServices } = await supabase
+                .from('invoice_services')
+                .select('*')
+                .eq('invoice_id', id);
 
             res.json({
                 success: true,
                 data: {
                     id: updated.id,
                     invoiceNumber: updated.invoice_number,
-                    agencyName: updated.agency_name,
-                    agencyContact: updated.agency_contact,
-                    agencyAddress: updated.agency_address,
-                    agencyLogo: updated.agency_logo,
                     clientName: updated.client_name,
-                    clientPhone: updated.client_phone,
-                    clientAddress: updated.client_address,
-                    invoiceDate: updated.invoice_date,
-                    dueDate: updated.due_date,
-                    subtotal: updated.subtotal,
-                    taxPercent: updated.tax_percent,
-                    taxAmount: updated.tax_amount,
-                    discountPercent: updated.discount_percent,
-                    discountAmount: updated.discount_amount,
                     grandTotal: updated.grand_total,
                     paymentStatus: updated.payment_status,
-                    services: updatedServices.map(s => ({
-                        id: s.id,
-                        name: s.name,
-                        quantity: s.quantity,
-                        rate: s.rate,
-                        amount: s.amount
+                    services: (updatedServices || []).map(s => ({
+                        id: s.id, name: s.name, quantity: s.quantity, rate: s.rate, amount: s.amount
                     })),
-                    createdAt: updated.created_at,
                     updatedAt: updated.updated_at
                 },
                 message: 'Invoice updated successfully'
@@ -405,11 +330,16 @@ const invoicesController = {
     /**
      * Delete an invoice
      */
-    delete: (req, res, next) => {
+    delete: async (req, res, next) => {
         try {
             const { id } = req.params;
 
-            const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+            const { data: existing } = await supabase
+                .from('invoices')
+                .select('id')
+                .eq('id', id)
+                .single();
+
             if (!existing) {
                 return res.status(404).json({
                     success: false,
@@ -418,12 +348,9 @@ const invoicesController = {
             }
 
             // Services will be deleted automatically due to CASCADE
-            db.prepare('DELETE FROM invoices WHERE id = ?').run(id);
+            await supabase.from('invoices').delete().eq('id', id);
 
-            res.json({
-                success: true,
-                message: 'Invoice deleted successfully'
-            });
+            res.json({ success: true, message: 'Invoice deleted successfully' });
         } catch (error) {
             next(error);
         }
@@ -432,7 +359,7 @@ const invoicesController = {
     /**
      * Import invoices (Bulk Create)
      */
-    import: (req, res, next) => {
+    import: async (req, res, next) => {
         try {
             const { invoices } = req.body;
 
@@ -443,92 +370,72 @@ const invoicesController = {
                 });
             }
 
-            const importInfo = {
-                total: invoices.length,
-                success: 0,
-                failed: 0,
-                errors: []
-            };
+            const importInfo = { total: invoices.length, success: 0, failed: 0, errors: [] };
 
-            const importTransaction = db.transaction((items) => {
-                for (const inv of items) {
-                    try {
-                        // Basic validation
-                        if (!inv.clientName || !inv.invoiceNumber) {
-                            throw new Error('Missing clientName or invoiceNumber');
-                        }
-
-                        // Check duplicate
-                        const existing = db.prepare('SELECT id FROM invoices WHERE invoice_number = ?').get(inv.invoiceNumber);
-                        if (existing) {
-                            throw new Error(`Invoice ${inv.invoiceNumber} already exists`);
-                        }
-
-                        // Insert invoice
-                        const invoiceStmt = db.prepare(`
-                            INSERT INTO invoices (
-                                invoice_number, agency_name, agency_contact, agency_address,
-                                client_name, client_phone, client_address, invoice_date, due_date,
-                                subtotal, tax_percent, tax_amount, discount_percent, discount_amount,
-                                grand_total, payment_status
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        `);
-
-                        const result = invoiceStmt.run(
-                            inv.invoiceNumber,
-                            inv.agencyName || null,
-                            inv.agencyContact || null,
-                            inv.agencyAddress || null,
-                            inv.clientName,
-                            inv.clientPhone || null,
-                            inv.clientAddress || null,
-                            inv.invoiceDate || new Date().toISOString().split('T')[0],
-                            inv.dueDate || new Date().toISOString().split('T')[0],
-                            inv.subtotal || 0,
-                            inv.taxPercent || 0,
-                            inv.taxAmount || 0,
-                            inv.discountPercent || 0,
-                            inv.discountAmount || 0,
-                            inv.grandTotal || 0,
-                            inv.paymentStatus || 'pending'
-                        );
-
-                        const invoiceId = result.lastInsertRowid;
-
-                        // Insert services
-                        if (inv.services && Array.isArray(inv.services)) {
-                            const serviceStmt = db.prepare(`
-                                INSERT INTO invoice_services (invoice_id, name, quantity, rate, amount)
-                                VALUES (?, ?, ?, ?, ?)
-                            `);
-
-                            for (const s of inv.services) {
-                                serviceStmt.run(
-                                    invoiceId,
-                                    s.name || 'Service',
-                                    s.quantity || 1,
-                                    s.rate || 0,
-                                    s.amount || 0
-                                );
-                            }
-                        }
-
-                        importInfo.success++;
-                    } catch (err) {
-                        importInfo.failed++;
-                        importInfo.errors.push({ invoice: inv.invoiceNumber, error: err.message });
+            for (const inv of invoices) {
+                try {
+                    if (!inv.clientName || !inv.invoiceNumber) {
+                        throw new Error('Missing clientName or invoiceNumber');
                     }
-                }
-            });
 
-            importTransaction(invoices);
+                    const { data: existingCheck } = await supabase
+                        .from('invoices')
+                        .select('id')
+                        .eq('invoice_number', inv.invoiceNumber)
+                        .single();
+
+                    if (existingCheck) {
+                        throw new Error(`Invoice ${inv.invoiceNumber} already exists`);
+                    }
+
+                    const { data: newInv, error } = await supabase
+                        .from('invoices')
+                        .insert({
+                            invoice_number: inv.invoiceNumber,
+                            agency_name: inv.agencyName || null,
+                            agency_contact: inv.agencyContact || null,
+                            agency_address: inv.agencyAddress || null,
+                            client_name: inv.clientName,
+                            client_phone: inv.clientPhone || null,
+                            client_address: inv.clientAddress || null,
+                            invoice_date: inv.invoiceDate || new Date().toISOString().split('T')[0],
+                            due_date: inv.dueDate || new Date().toISOString().split('T')[0],
+                            subtotal: inv.subtotal || 0,
+                            tax_percent: inv.taxPercent || 0,
+                            tax_amount: inv.taxAmount || 0,
+                            discount_percent: inv.discountPercent || 0,
+                            discount_amount: inv.discountAmount || 0,
+                            grand_total: inv.grandTotal || 0,
+                            payment_status: inv.paymentStatus || 'pending'
+                        })
+                        .select()
+                        .single();
+
+                    if (error) throw error;
+
+                    if (inv.services && Array.isArray(inv.services)) {
+                        const serviceInserts = inv.services.map(s => ({
+                            invoice_id: newInv.id,
+                            name: s.name || 'Service',
+                            quantity: s.quantity || 1,
+                            rate: s.rate || 0,
+                            amount: s.amount || 0
+                        }));
+                        await supabase.from('invoice_services').insert(serviceInserts);
+                    }
+
+                    importInfo.success++;
+                } catch (err) {
+                    importInfo.failed++;
+                    importInfo.errors.push({ invoice: inv.invoiceNumber, error: err.message });
+                }
+            }
 
             res.json({
                 success: true,
                 data: importInfo,
                 message: `Imported ${importInfo.success} invoices. Failed: ${importInfo.failed}`
             });
-
         } catch (error) {
             next(error);
         }

@@ -1,5 +1,5 @@
 /**
- * FinanceFlow Backend - Express Application
+ * FinanceFlow Backend - Express Application (Supabase Version)
  */
 
 const express = require('express');
@@ -7,8 +7,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const path = require('path');
-
-const { initializeDatabase } = require('./database/db');
 
 // Import routes
 const clientsRoutes = require('./routes/clients');
@@ -25,8 +23,8 @@ const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
-// Initialize database
-initializeDatabase();
+// Supabase is initialized on-demand when controllers are loaded
+console.log('📡 Backend configured for Supabase Cloud Database');
 
 // Security middleware
 app.use(helmet({
@@ -48,10 +46,8 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // Body parsing
-app.use(express.json({ limit: '10mb' })); // Increased limit for logo uploads
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-
-
 
 // API Routes
 app.use('/api/clients', clientsRoutes);
@@ -64,23 +60,21 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', dataRoutes);
 
 // Static file serving for uploads (avatars, logos)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+const uploadsPath = process.env.UPLOADS_PATH || path.join(__dirname, 'uploads');
+app.use('/uploads', express.static(uploadsPath));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({
         success: true,
-        message: 'FinanceFlow API is running',
+        message: 'FinanceFlow API is running (Supabase)',
         timestamp: new Date().toISOString()
     });
 });
 
 app.get('/', (req, res) => {
-    res.json({
-        message: 'FinanceFlow Backend is running'
-    });
+    res.json({ message: 'FinanceFlow Backend is running' });
 });
-
 
 // Error handling middleware
 app.use(errorHandler);

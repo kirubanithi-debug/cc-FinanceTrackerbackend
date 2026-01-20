@@ -18,6 +18,7 @@ const settingsRoutes = require('./routes/settings');
 const analyticsRoutes = require('./routes/analytics');
 const dataRoutes = require('./routes/data');
 const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
 
 // Import middleware
 const errorHandler = require('./middleware/errorHandler');
@@ -59,7 +60,11 @@ app.use('/api/invoices', invoicesRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api', dataRoutes);
+
+// Static file serving for uploads (avatars, logos)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

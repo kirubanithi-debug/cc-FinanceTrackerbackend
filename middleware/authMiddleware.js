@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'financeflow-secret-key-change-it-in-prod';
 
+const { db } = require('../database/db');
+
 /**
  * Middleware to verify JWT token
  */
@@ -34,6 +36,7 @@ const verifyToken = (req, res, next) => {
         req.user = decoded;
         next();
     } catch (err) {
+        console.error('Verify Token Error:', err.message);
         return res.status(403).json({
             success: false,
             error: { code: 'FORBIDDEN', message: 'Invalid or expired token' }
@@ -41,4 +44,29 @@ const verifyToken = (req, res, next) => {
     }
 };
 
-module.exports = verifyToken;
+/**
+ * Middleware to verify Admin Role
+ * Must be placed AFTER verifyToken
+ */
+const verifyAdmin = (req, res, next) => {
+    try {
+        if (!req.user || !req.user.id) {
+            return res.status(401).json({ success: false, message: 'Unauthorized' });
+        }
+
+        const user = db.prepare('SELECT role FROM users WHERE id = ?').get(req.user.id);
+
+        if (!user || user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                error: { code: 'FORBIDDEN', message: 'Admin access required' }
+            });
+        }
+
+        next();
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error checking admin role' });
+    }
+};
+
+module.exports = { verifyToken, verifyAdmin };

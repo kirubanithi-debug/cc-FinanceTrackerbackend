@@ -9,10 +9,10 @@ const fs = require('fs');
 
 // Resolve full database path
 const dbPath = path.resolve(
-  __dirname,
-  process.env.DATABASE_PATH || 'financeflow.db'
+    __dirname,
+    process.env.DATABASE_PATH || 'financeflow.db'
 );
-    
+
 // Ensure database directory exists
 const dbDir = path.dirname(dbPath);
 if (!fs.existsSync(dbDir)) {
@@ -106,6 +106,7 @@ function initializeDatabase() {
     `);
 
     // Create users table
+    // Updated with fields for verification and OTP
     db.exec(`
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +114,25 @@ function initializeDatabase() {
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
             avatar TEXT,
+            is_verified INTEGER DEFAULT 0,
+            verification_token TEXT,
+            reset_token TEXT,
+            reset_token_expiry INTEGER,
+            otp TEXT,
+            otp_expiry INTEGER,
             created_at TEXT DEFAULT (datetime('now'))
+        )
+    `);
+
+    // Create login_history table
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS login_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            ip_address TEXT,
+            user_agent TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
     `);
 

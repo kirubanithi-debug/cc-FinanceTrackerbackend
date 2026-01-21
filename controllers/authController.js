@@ -79,7 +79,7 @@ exports.signup = async (req, res, next) => {
         }
 
         // Hash password
-        const salt = await bcrypt.genSalt(10);
+        const salt = await bcrypt.genSalt(8); // Reduced from 10 for faster processing on free-tier hosting
         const hashedPassword = await bcrypt.hash(password, salt);
 
         // Generate Verification Token
@@ -271,7 +271,7 @@ exports.updateProfile = async (req, res, next) => {
             if (!isMatch) {
                 return res.status(401).json({ success: false, message: 'Incorrect current password' });
             }
-            const salt = await bcrypt.genSalt(10);
+            const salt = await bcrypt.genSalt(8); // Reduced from 10 for faster processing on free-tier hosting
             passwordHash = await bcrypt.hash(newPassword, salt);
         }
 
